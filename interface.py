@@ -35,14 +35,13 @@ from PySide.QtWidgets import (
     QGraphicsRectItem,
     QGraphicsTextItem,
     QGraphicsProxyWidget,
-    QShortcut
     )
 from PySide.QtGui import (
         QBrush,
         QPen,
         QColor,
         QPainter,
-        QKeySequence
+        QKeyEvent
         )
 
 class Interface(QMainWindow):
@@ -77,32 +76,73 @@ class GraphEditor(QGraphicsView):
         self.setRenderHint(QPainter.SmoothPixmapTransform)
         self.setRenderHint(QPainter.TextAntialiasing)
 
+        self.selected_port = None
+        self.temp_edge = None
+
         self.setScene(scene)
 
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() == Qt.Key_A and event.modifiers() == Qt.ShiftModifier:
+            self.add_new_node()
+        else:
+            super().keyPressEvent(event)
+
+    def add_new_node(self):
+        x = 100
+        y = 100
+        width = 100
+        height = 50
+        name = "node"
+
+        new_node = Node(x, y, width, height, name)
+        self.scene().addItem(new_node)
+
+    def mousePressEvent(self, event):
+        item = self.itemAt(event.pos())
+        
+        if isinstance(item, Port):
+            if self.selected_port is None:
+                self.selected_port = item
+                self.temp_edge = QGraphicsLineItem()
+                self.temp_edge.setPen(QPen(QColor(0, 0, 255), 2))
+                self.scene().addItem(self.temp_edge)
+            else:
+                self.create_edge(self.selected_port, item)
+                self.selected_port = None
+                self.temp_edge = None
+        elif self.selected_port is not None:
+            self.selected_port = None
+            self.temp_edge = None
+
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.selected_port and self.temp_edge:
+            # Update the temporary edge while moving the cursor
+            mouse_pos = self.mapToScene(event.pos())
+            p1_pos = self.selected_port.mapToScene(self.selected_port.rect().center())
+            self.temp_edge.setLine(p1_pos.x(), p1_pos.y(), mouse_pos.x(), mouse_pos.y())
+        super().mouseMoveEvent(event)
+
+    def create_edge(self, port1, port2):
+        edge = Edge(port1, port2)
+        self.scene().addItem(edge)
+        
+        source_node = port1.parentItem()
+        target_node = port2.parentItem()
+        print(source_node)
+
+        source_node.edges.append(edge)
+        target_node.edges.append(edge)
 
 class GraphScene(QGraphicsScene):
     def __init__(self):
         super().__init__()
 
-        node1 = Node(0, 0, 150, 100, "Node 1")
-        node2 = Node(200, 0, 150, 100, "Node 2")
-        node3 = Node(100, 200, 150, 100, "Node 3")
-
-        self.addItem(node1)
-        self.addItem(node2)
-        self.addItem(node3)
-
-        # make edge connections
-        edge = Edge(node1.outputs[0], node2.inputs[0])
-        self.addItem(edge)
-
-        # shortcut = QKeySequence(Qt.CTRL + Qt.Key_M)
-        # self.add_node = QShortcut(shortcut, self, None, self.make_node)
-        # self.add_node.activated.connect(self.make_node)
-
         self.update()
 
     def make_node(self):
+        print("make_node made")
         node = Node(0, 0, 150, 100, "Node")
         self.addItem(node)
         self.update()
@@ -146,12 +186,17 @@ class Node(QGraphicsRectItem):
         self.name_label.setTextInteractionFlags(Qt.TextEditorInteraction)
         self.name_label.setFlag(QGraphicsItem.ItemIsSelectable)
 
+    def mouseMoveEvent(self, event):
+        super().mouseMoveEvent(event)
+        self.itemChange(QGraphicsItem.ItemPositionChange, self.pos())
+
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange:
+            print("POSITION CHANGES")
+            print(self.edges)
             for edge in self.edges:
                 edge.update_position()
         return super().itemChange(change, value)
-
 
 class Port(QGraphicsEllipseItem):
     def __init__(self, parent, port_type, x, y):
@@ -169,6 +214,10 @@ class Port(QGraphicsEllipseItem):
     def mousePressEvent(self, event):
         super().mousePressEvent(event)
         print(f"port {self.port_type} clicked")
+        event.setAccepted(True)
+
+    def contains(self, pos):
+        return super().contains(pos)
 
 
 class Edge(QGraphicsLineItem):
@@ -178,14 +227,17 @@ class Edge(QGraphicsLineItem):
         self.source_port = source_port
         self.target_port = target_port
 
+        self.source_node = self.source_port.parentItem()
+        self.target_node = self.target_port.parentItem()
+
         self.setPen(QPen(Qt.black, 2))
         self.update_position()
 
     def update_position(self):
-        start_pos = self.source_port.scenePos() + QPointF(self.source_port.rect().center())
-        end_pos = self.target_port.scenePos() + QPointF(self.target_port.rect().center())
-        self.setLine(start_pos.x(), start_pos.y(), end_pos.x(), end_pos.y())
-    
+        source_pos = self.source_port.mapToScene(self.source_port.rect().center())
+        target_pos = self.target_port.mapToScene(self.target_port.rect().center())
+        self.setLine(source_pos.x(), source_pos.y(), target_pos.x(), target_pos.y())
+
     def paint(self, painter, option, widget=None):
         painter.setPen(self.pen())
         self.update_position()
