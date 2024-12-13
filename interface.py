@@ -13,6 +13,7 @@ for version in pyside_versions:
         sys.modules["PySide"] = importlib.import_module(version)
         sys.modules["PySide.QtCore"] = importlib.import_module(f"{version}.QtCore")
         sys.modules["PySide.QtWidgets"] = importlib.import_module(f"{version}.QtWidgets")
+        sys.modules["PySide.QtGui"] = importlib.import_module(f"{version}.QtGui")
         shiboken = importlib.import_module(f"shiboken{version[-1]}")
         wrapInstance = shiboken.wrapInstance
 
@@ -35,14 +36,21 @@ from PySide.QtWidgets import (
     QGraphicsRectItem,
     QGraphicsTextItem,
     QGraphicsProxyWidget,
+    QGraphicsPathItem
     )
 from PySide.QtGui import (
         QBrush,
         QPen,
         QColor,
         QPainter,
-        QKeyEvent
+        QKeyEvent,
+        QPainterPath
         )
+
+if version == "PySide6":
+    from PySide.QtWidgets import QMouseEvent
+elif version == "PySide2":
+    from PySide.QtGui import QMouseEvent
 
 class Interface(QMainWindow):
     def __init__(self, *args, **kwargs):
@@ -71,10 +79,11 @@ class Interface(QMainWindow):
 class GraphEditor(QGraphicsView):
     def __init__(self, scene):
         super().__init__(scene)
-
-        self.setRenderHint(QPainter.Antialiasing)
-        self.setRenderHint(QPainter.SmoothPixmapTransform)
-        self.setRenderHint(QPainter.TextAntialiasing)
+        
+        if version == "PySide6":
+            self.setRenderHint(int(QPainter.Antialiasing))
+            self.setRenderHint(int(QPainter.SmoothPixmapTransform))
+            self.setRenderHint(int(QPainter.TextAntialiasing))
 
         self.selected_port = None
         self.temp_edge = None
@@ -96,27 +105,51 @@ class GraphEditor(QGraphicsView):
 
         new_node = Node(x, y, width, height, name)
         self.scene().addItem(new_node)
+    
+    def find_port_at_position(self, scene_pos):
+        for item in self.scene().items(scene_pos):
+            if isinstance(item, Port):
+                return item
+        return None
 
     def mousePressEvent(self, event):
-        item = self.itemAt(event.pos())
+        scene_pos = self.mapToScene(event.pos())
+        item = self.find_port_at_position(scene_pos)
+        print(f"clicked item: {item}, type: {type(item)}")
+
+        if isinstance(item, QGraphicsLineItem) and item == self.temp_edge:
+            print("clicked on temp edge, ignoring")
+            return
         
         if isinstance(item, Port):
+            print(f"clicked port: {item}")
+            print(f"selected_port: {self.selected_port}")
             if self.selected_port is None:
                 self.selected_port = item
+                print(f"selected_port set to: {self.selected_port}")
+                print("first port selected")
                 self.temp_edge = QGraphicsLineItem()
                 self.temp_edge.setPen(QPen(QColor(0, 0, 255), 2))
                 self.scene().addItem(self.temp_edge)
+
             else:
+                print("connecting final port")
                 self.create_edge(self.selected_port, item)
                 self.selected_port = None
+                if self.temp_edge:
+                    self.scene().removeItem(self.temp_edge)
+                    self.temp_edge = None
+        else:
+            print("clicked on something else")
+            if self.temp_edge:
+                print("removing temporary edge")
+                self.scene().removeItem(self.temp_edge)
                 self.temp_edge = None
-        elif self.selected_port is not None:
             self.selected_port = None
-            self.temp_edge = None
 
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event):
+    def mouseMoveEvent(self, event: QMouseEvent):
         if self.selected_port and self.temp_edge:
             # Update the temporary edge while moving the cursor
             mouse_pos = self.mapToScene(event.pos())
@@ -125,6 +158,7 @@ class GraphEditor(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def create_edge(self, port1, port2):
+        print("create_edge run")
         edge = Edge(port1, port2)
         self.scene().addItem(edge)
         
@@ -192,8 +226,8 @@ class Node(QGraphicsRectItem):
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.ItemPositionChange:
-            print("POSITION CHANGES")
-            print(self.edges)
+            # print("POSITION CHANGES")
+            # print(self.edges)
             for edge in self.edges:
                 edge.update_position()
         return super().itemChange(change, value)
@@ -220,7 +254,7 @@ class Port(QGraphicsEllipseItem):
         return super().contains(pos)
 
 
-class Edge(QGraphicsLineItem):
+class Edge(QGraphicsPathItem):
     def __init__(self, source_port, target_port):
         super().__init__()
 
@@ -236,12 +270,23 @@ class Edge(QGraphicsLineItem):
     def update_position(self):
         source_pos = self.source_port.mapToScene(self.source_port.rect().center())
         target_pos = self.target_port.mapToScene(self.target_port.rect().center())
-        self.setLine(source_pos.x(), source_pos.y(), target_pos.x(), target_pos.y())
+        # self.setLine(source_pos.x(), source_pos.y(), target_pos.x(), target_pos.y())
+
+        dx = abs(target_pos.x() - source_pos.x()) / 2
+        control_point1 = QPointF(source_pos.x() + dx, source_pos.y())
+        control_point2 = QPointF(target_pos.x() - dx, target_pos.y())
+
+        path = QPainterPath()
+        path.moveTo(source_pos)
+        path.cubicTo(control_point1, control_point2, target_pos)
+
+        self.setPath(path)
 
     def paint(self, painter, option, widget=None):
         painter.setPen(self.pen())
         self.update_position()
-        painter.drawLine(self.line())
+        # painter.drawLine(self.line())
+        super().paint(painter, option, widget)
 
 def main():
     ui = Interface()
